@@ -17,7 +17,7 @@ n_cohort2 <- 4
 cohortSizes2 <- c(20,20,30,20)
 
 IClist2 <- c("Control","IC1","IC2","Sustain")
-n_IC2 <- length(IClist)
+n_IC2 <- length(IClist2)
 IC_lens2 <- c(1,2,2,1)
 ########
 
