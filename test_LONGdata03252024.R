@@ -17,20 +17,20 @@ n_cohort2 <- 4
 cohortSizes2 <- c(20,20,30,20)
 
 IClist2 <- c("Control","IC1","IC2","Sustain")
-n_IC2 <- length(IClist)
+n_IC2 <- length(IClist2)
 IC_lens2 <- c(1,2,2,1)
+isH2H_input <- FALSE
+H2H_IClist2 <- c(2,3)
 ########
 
 
-#Note: init_df() does not account for head to head or ABA designs.
-#Note: init_df() does not customize Condition Durations.
-
-
-f_init_df <- function(n_cohort=n_cohort2,
+createSimpleDF <- function(n_cohort=n_cohort2,
                     cohortSizes=cohortSizes2,
                     IClist=IClist2,
                     n_IC=n_IC2,
                     IC_lens=IC_lens2) {
+  
+  IClist <- trimws(IClist) #clean whitespace
   
   df_test <- data.frame(CohortID = rep(1:n_cohort,n_IC),
                         CohortSize = rep(cohortSizes,n_IC),
@@ -78,21 +78,68 @@ f_init_df <- function(n_cohort=n_cohort2,
 }
 
 
-main_df <- f_init_df(); main_df
+main_df <- createSimpleDF(); main_df %>% arrange(ConditionID,CohortID)
 
 ####Editable Table####
 customizations_byCohortIC <- data.frame(CohortID=main_df$CohortID,
                                         ConditionName=main_df$ConditionName,
                                         ConditionDurationChange=rep(0,nrow(main_df)),
-                                        ConditionDurationStartDelay=rep(1,nrow(main_df))  )
+                                        ConditionDurationStartDelay=rep(0,nrow(main_df))  )
 
 
 customizations_byCohortIC #User customizes; will update main_df.
 ########
 
-# Check for isH2H here.
+# Account for time duration changes, delayed starts, and H2H designs.
 
-f_ggplot_df <- function(n_cohort=n_cohort2,
+createH2HDF <- function(df_test1,
+                        IClist=IClist2,
+                        H2H_IClist=H2H_IClist2) {
+  
+  n_H2H <- length(H2H_IClist)
+    
+    #Note: Of all the H2H Conditions, only keep the first one because we'll load all the H2H items at once.
+    IC_ids <- 1:n_IC
+    ICs_toloop <- IC_ids[!(IC_ids %in% H2H_IClist[-1])]
+    df_test2 <- df_test1[0,]
+    
+    for (ic in ICs_toloop) {
+      df_testH2H <- df_test1[0,]
+      
+      subset_torbind <- df_test1 %>% filter(ConditionID==ic)
+      
+      for (i in 1:(n_H2H)) {  df_testH2H <- rbind(df_testH2H,subset_torbind)   }
+      
+      df_testH2H <- df_testH2H %>% arrange(CohortID)
+        
+      if (ic %in% H2H_IClist) { 
+        yVals <- condIDs <- condNames <- c()
+        for (i in 0:(n_H2H-1)) { 
+          yVals <- c(yVals,seq((n_cohort*n_H2H)-i,1,-(n_H2H))) 
+          condIDs <- c(condIDs,rep(H2H_IClist[i+1],n_cohort))
+          condNames <- c(condNames,rep(IClist[H2H_IClist[i+1]],n_cohort))
+          }
+        
+        df_testH2H$ConditionID <- condIDs; df_testH2H$ConditionName <- condNames
+        
+      } else { yVals <- (n_cohort*n_H2H):1 }
+      
+      df_testH2H$yStart <- yVals
+      df_testH2H$yEnd <- yVals
+      
+      df_testH2H %>%
+        select(CohortID,ConditionID,xStart,xEnd,yStart,yEnd) 
+      
+      df_test2 <- rbind(df_test2,df_testH2H)
+      
+      
+    }
+    
+    return(df_test2 %>% arrange())
+    
+}
+
+createCustomizedDF <- function(n_cohort=n_cohort2,
                         cohortSizes=cohortSizes2,
                         IClist=IClist2,
                         n_IC=n_IC2,
@@ -100,9 +147,10 @@ f_ggplot_df <- function(n_cohort=n_cohort2,
                         df_test=main_df,
                         df_cust=customizations_byCohortIC) {
   
+  
   #To account for changed Condition Duration, merge with df_test then create updated columns for xStart and xEnd
   df_test1 <- left_join(df_test,df_cust,by=c('CohortID','ConditionName'))
-  
+
   #Will want to optimize the for-loop with dplyr later, but wasn't working
   xStart <- xEnd <- c()
   
@@ -111,7 +159,7 @@ f_ggplot_df <- function(n_cohort=n_cohort2,
     final_timeunit <- sum(n_cohort,
                           IC_lens,
                           sum((df_cust %>% filter(CohortID==df_test1$CohortID[r]))$ConditionDurationChange),
-                          sum((df_cust %>% filter(CohortID==df_test1$CohortID[r]))$ConditionDurationStartDelay), -2)
+                          sum((df_cust %>% filter(CohortID==df_test1$CohortID[r]))$ConditionDurationStartDelay), -1)
     
     #Doesn't check that change still keeps Duration at >=1
     if (df_test1$ConditionID[r]==1) { 
@@ -121,7 +169,7 @@ f_ggplot_df <- function(n_cohort=n_cohort2,
                        df_test1$ConditionDurationStartDelay[r+1],
                        df_test1$ConditionDurationChange[r],
                        IC_lens[1],
-                       df_test1$CohortID[r],-2)
+                       df_test1$CohortID[r],-1)
       
       xEnd <- c(xEnd,curr_xEnd)
       
@@ -150,11 +198,25 @@ f_ggplot_df <- function(n_cohort=n_cohort2,
   df_test1$xEnd2 <- xEnd
   
   
-  #assign colors across Conditions
-  colorsbyCondition <- viridis::turbo(n_IC)
+  return(df_test1)
+  
+}
+
+createGGPlotDF <- function(df_test1=df_test1.1) {
+  
+  #create df of properties by unique ICs
+  
+  IClist_unique <- unique(trimws( df_test1$ConditionName ))
+  colorsbyCondition <- viridis::turbo(length(IClist_unique))
+  df_ICproperties <- data.frame(ConditionName = IClist_unique,
+                                ConditionID2 = length(IClist_unique),
+                                arrange.colors = colorsbyCondition)
+  
+  #merge properties with df
+  df_test2 <- left_join(df_test2,df_ICproperties,by='ConditionName')
   
   df_test2 <- df_test1 %>%
-    mutate(arrange.colors = colorsbyCondition[ConditionID])  %>%
+    left_join(df_ICproperties)  %>%
     arrange(CohortID)
   
   #make df for ggplot
@@ -163,17 +225,31 @@ f_ggplot_df <- function(n_cohort=n_cohort2,
            width = CohortSize) %>%
     select(theIntervention,xStart2,xEnd2,yStart,yEnd,arrange.colors,width)
   
+  dfNoNA <- dfNoNA %>%
+    rename(xStart=xStart2,
+           xEnd=xEnd2)
+    
   return(dfNoNA)
   
 }
 
 
-dfNoNA2 <- f_ggplot_df(); dfNoNA2
+####RUN CODE####
 
 
+if(isH2H_input) { #if H2H
+  df_test1.1 <- createCustomizedDF()
+  df_test1.2 <- createH2HDF(df_test1.1, IClist2, H2H_IClist2) %>% arrange(ConditionID)
+  dfNoNA <- createGGPlotDF(df_test1.2); dfNoNA %>% arrange(theIntervention)
+  
+} else {
+  df_test1.1 <- createCustomizedDF() %>% arrange(ConditionID)
+  dfNoNA <- createGGPlotDF(df_test1.1); dfNoNA %>% arrange(theIntervention)
+  
+}
 
 
-
+###########
 
 #### GGPLOT SCRIPT FROM APP.R ####
 
